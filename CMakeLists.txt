@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.28)
 
 # Set project name and version
-project(OpenGL-Template LANGUAGES C CXX)
+project(Fractal-SDFs LANGUAGES C CXX)
 
 # Set C/C++ standard
 set(CMAKE_CXX_STANDARD 23)

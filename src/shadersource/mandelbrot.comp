@@ -1,0 +1,116 @@
+#version 460
+#extension GL_ARB_gpu_shader_fp64 : require
+
+layout (local_size_x = 8, local_size_y = 4, local_size_z = 1) in;
+layout(rgba32f, binding = 0) uniform image2D imgOut;
+
+uniform float time;
+//uniform vec2 resolution;
+
+const double EPSILON = 1e-4;
+const double SCALE = 4.0;
+
+// complex number operations
+vec2 cadd( vec2 a, float s ) { return vec2( a.x+s, a.y ); }
+vec2 cmul( vec2 a, vec2 b )  { return vec2( a.x*b.x - a.y*b.y, a.x*b.y + a.y*b.x ); }
+vec2 cdiv( vec2 a, vec2 b )  { float d = dot(b,b); return vec2( dot(a,b), a.y*b.x - a.x*b.y ) / d; }
+vec2 csqrt( vec2 z ) { float m = length(z); return sqrt( 0.5*vec2(m+z.x, m-z.x) ) * vec2( 1.0, sign(z.y) ); }
+vec2 conj( vec2 z ) { return vec2(z.x,-z.y); }
+vec2 cpow( vec2 z, float n ) { float r = length( z ); float a = atan( z.y, z.x ); return pow( r, n )*vec2( cos(a*n), sin(a*n) ); }
+
+struct DETrapResult {
+    float distance;
+    float trap;
+};
+
+float trapPoint(vec2 z, vec2 p)
+{
+    return length(z - p);
+}
+
+float trapLine(vec2 z, float m, float q)
+{
+    // y = mx + q
+    return abs(m*z.x + -z.y + q) / sqrt(pow(m, 2.0) + 1.0);
+}
+
+// Trap julia??
+
+// Formulae:
+// DE = 0.5 * ln(r) * r / dr,
+// r = |f_n(c)|, dr = |f'_n(c)|
+// f_n(c) = f_n-1(c)^2 + c, f_0(c) = 0,
+// f'_n(c) = 2f_n-1(c)f'_n-1(c) + 1
+DETrapResult DE_Mandelbrot(vec2 c, float ESCAPE_RADIUS2)
+{
+    const int ITERATIONS = 1024;
+    const float EXPONENT = 2.0;
+
+    // Orbit trap
+    float minTrapDist = 1e20;
+
+    vec2 z  = vec2(0.0);
+    vec2 dz = vec2(0.0);
+    float r2 = 0.0;
+    for (int i = 0; i < ITERATIONS && r2 < ESCAPE_RADIUS2; i++) {
+        // Orbit trap calculation.
+        // -----------------------
+
+        // Point
+        //minTrapDist = min(minTrapDist, trapPoint(z, vec2(1.0)));
+        // Line
+        //minTrapDist = min(minTrapDist, trapLine(z, 2.0, 1.0));
+
+        // Distance Estimation calculation.
+        // --------------------------------
+        dz = EXPONENT*cmul(cpow(z, EXPONENT-1.0), dz) + vec2(1.0, 0.0);
+        z  = cpow(z, EXPONENT) + c;
+        r2 = dot(z, z);
+    }
+
+    float d = 0.5*sqrt(r2 / dot(dz, dz))*log(r2);
+    return DETrapResult(d, minTrapDist);
+}
+
+// https://www.stevenfrady.com/tools/palette?p=[[0.11,0.46,0.51],[0.7,0.53,0.55],[0.7,0.13,0.92],[0.07,0.56,0.83]]
+vec3 palette(float t) {
+    vec3 a=vec3(0.11,0.46,0.51);
+    vec3 b=vec3(0.7,0.53,0.55);
+    vec3 c=vec3(0.7,0.13,0.92);
+    vec3 d=vec3(0.07,0.56,0.83);
+    return a+b*cos(6.28318*(c*t+d));
+}
+
+void main()
+{
+    vec2 fragCoord  = vec2(gl_GlobalInvocationID.xy);
+    vec2 resolution = vec2(gl_NumWorkGroups.xy * gl_WorkGroupSize.xy);
+    vec2 uv  = fragCoord / resolution;
+    vec3 col = vec3(0.0);
+
+    // Render fractal.
+    vec2 z = (2.0*fragCoord - resolution) / resolution.y;
+    vec2 center = vec2(-0.05, 0.6805);
+    float t = time*0.3;
+    float zoom = exp(-0.5*time);
+    mat2 rot = mat2(cos(t), sin(t), -sin(t), cos(t));
+
+    vec2 c = center + rot*(z - center)*zoom;
+
+    DETrapResult deTrap;
+    if (fract(time*0.5) > 1.0)
+    {
+        deTrap = DE_Mandelbrot(c, pow(10.0, 0.1));
+        col = vec3(clamp(pow(4.0*deTrap.distance/zoom, 0.2), 0.0, 1.0));
+    }
+    else
+    {
+        DETrapResult deTrap = DE_Mandelbrot(c, 1e20);
+        float normTrap = log(deTrap.trap / zoom + 1.0);
+        normTrap = fract(normTrap * 0.15);
+        normTrap = pow(normTrap, 0.5);
+        col = palette(normTrap);
+    }
+
+    imageStore(imgOut, ivec2(fragCoord), vec4(col, 1.0));
+}
