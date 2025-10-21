@@ -1,5 +1,6 @@
 #include "Window.h"
 
+#include <cstring>
 #include <stdexcept>
 
 #include <glad/glad.h>
@@ -88,6 +89,18 @@ namespace AppGL
         void Window::writeFrameBufferToFile(std::vector<uint8_t>& frame, FILE* file) const
         {
                 glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, frame.data());
+
+                int rowSize = width * 3;
+                std::vector<uint8_t> tmp(rowSize);
+                for (int y = 0; y < height / 2; ++y)
+                {
+                        uint8_t* rowTop = frame.data() + y * rowSize;
+                        uint8_t* rowBot = frame.data() + (height - 1 - y) * rowSize;
+                        memcpy(tmp.data(), rowTop, rowSize);
+                        memcpy(rowTop, rowBot, rowSize);
+                        memcpy(rowBot, tmp.data(), rowSize);
+                }
+
                 fwrite(frame.data(), 1, frame.size(), file);
         }
 }

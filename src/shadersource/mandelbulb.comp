@@ -4,28 +4,57 @@
 layout (local_size_x = 8, local_size_y = 4, local_size_z = 1) in;
 layout(rgba32f, binding = 0) uniform image2D imgOut;
 
-uniform float time;
+uniform float frames;
 
 const float PI = 3.14159;
-const float EPSILON = 1e-5;
-const int RAY_STEPS = 400;
-const float MAX_DIST = 100.0;
+const float EPSILON = 1e-6;
+const int RAY_STEPS = 10000;
+const float MAX_DIST = 50.0;
 
-float DE_Mandelbulb(vec3 c)
+// Utils
+// -----
+float expDec(float a, float b, float t) { if (a <= b || t < 0) return 0.0; return exp(log(a-b) - t) + b;  }
+float pcos(float t) { return 0.5 + 0.5*cos(t); }
+
+// Orbit trap types.
+// -----------------
+float trapPoint(vec3 z, vec3 p)
+{
+    return length(z - p);
+}
+// A is a point of the line denoted by normalized direction d.
+float trapLine(vec3 z, vec3 a, vec3 d)
+{
+    return length(cross(z-a, d));
+}
+
+struct DETrapInfo {
+    float distance;
+    float trap;
+};
+
+DETrapInfo DE_Mandelbulb(vec3 c)
 {
     const int ITER = 100;
     const float ESCAPE_RADIUS = 4.0;
-    const float EXP = max(8.0 * (0.5 + 0.5*sin(time*0.5)), 2.0);
+    float EXP = 8.0;
+
+    float minTrap = 1e9;
 
     vec3 z   = c;
     float dr = 1.0;
     float r  = 0.0;
     for (int i = 0; i < ITER; i++)
     {
+        // Orbit trap
+        // ----------
+        //minTrap = min(minTrap, trapPoint(z, vec3(0.0)));
+        minTrap = min(minTrap, trapLine(z, vec3(0.0), normalize(vec3(0.5, 0.7, 2.0))));
+
         r = length(z);
         if (r > ESCAPE_RADIUS) break;
 
-        float theta = acos(z.z / r);
+        float theta = acos(clamp(z.z / r, -1.0, 1.0));
         float phi   = atan(z.y,z.x);
         dr          = pow(r, EXP-1.0)*EXP*dr + 1.0;
 
@@ -35,25 +64,109 @@ float DE_Mandelbulb(vec3 c)
 
         z = zr * vec3(sin(theta)*cos(phi), sin(theta)*sin(phi), cos(theta)) + c;
     }
-    return 0.5 * log(r) * r / dr;
+    return DETrapInfo(0.5 * log(r) * r / dr, minTrap);
+}
+
+DETrapInfo DE_Julia(vec3 p, vec3 c)
+{
+    const int ITER = 100;
+    const float ESCAPE_RADIUS = 4.0;
+    float EXP = 8.0;
+
+    float minTrap = 1e9;
+
+    vec3 z   = p;
+    float dr = 1.0;
+    float r  = 0.0;
+    for (int i = 0; i < ITER; i++)
+    {
+        // Orbit trap
+        // ----------
+        //minTrap = min(minTrap, trapPoint(z, vec3(0.0)));
+        minTrap = min(minTrap, trapLine(z, vec3(0.0), normalize(vec3(0.5, 0.7, 2.0))));
+
+        r = length(z);
+        if (r > ESCAPE_RADIUS) break;
+
+        float theta = acos(clamp(z.z / r, -1.0, 1.0));
+        float phi   = atan(z.y,z.x);
+        dr          = pow(r, EXP-1.0)*EXP*dr + 1.0;
+
+        float zr = pow(r, EXP);
+        theta   *= EXP;
+        phi     *= EXP;
+
+        z = zr * vec3(sin(theta)*cos(phi), sin(theta)*sin(phi), cos(theta)) + c;
+    }
+    return DETrapInfo(0.3 * log(r) * r / dr, minTrap);
+}
+
+DETrapInfo DE_Mandelbox(vec3 p, float scale, float rMin2, float rMax2)
+{
+    const int ITER = 10;
+    const float ESCAPE_RADIUS2 = 16.0;
+    const float BOX_BORDER = 1.0;
+
+    float minTrap = 1e9;
+
+    vec3 z   = p;
+    float dr = 1.0;
+    for (int i = 0; i < ITER; i++)
+    {
+        // Box fold
+        z = clamp(z, -BOX_BORDER, BOX_BORDER) * 2.0 - z;
+
+        // Linear / Sphere fold
+        // --------------------
+        float r2 = dot(z,z);
+        if (r2 < rMin2) {
+            // Linear
+            float t = rMax2 / rMin2;
+            z *= t;
+            dr *= t;
+        } else if (r2 < rMax2) {
+            float t = rMax2 / r2;
+            z *= t;
+            dr *= t;
+        }
+
+        // Orbit trap
+        // ----------
+        //minTrap = min(minTrap, trapPoint(z, vec3(0.0)));
+        minTrap = min(minTrap, trapLine(z, vec3(0.0), normalize(vec3(0.5))));
+
+        z  = scale * z + p;
+        dr = abs(scale) * dr + 1.0;
+    }
+    return DETrapInfo(length(z) / abs(dr), minTrap);
 }
 
 struct RaymarchInfo {
     bool hit;
     int steps;
     float t;
+    float trap;
 };
 
 RaymarchInfo raymarch(vec3 start, vec3 dir)
 {
+    float minTrap = 1e9;
     float t = 0.0;
     bool hit = false;
     int i;
-
     for (i = 0; i < RAY_STEPS; i++)
     {
         vec3 p = start + t*dir;
-        float d = DE_Mandelbulb(p);
+
+        DETrapInfo deTrap;
+
+        //deTrap = DE_Mandelbulb(p);
+        deTrap = DE_Julia(p, p-pcos(frames/60.0f));
+        //deTrap = DE_Mandelbox(p, 2.0 + 1.0*pcos(frames/60.0f), 2.0, 7.0);
+
+        float d = deTrap.distance;
+        minTrap = min(minTrap, deTrap.trap);
+
         if (d < EPSILON) {
             hit = true;
             break;
@@ -61,37 +174,66 @@ RaymarchInfo raymarch(vec3 start, vec3 dir)
 
         t += d;
         if (t > MAX_DIST) break;
+
     }
 
-    return RaymarchInfo(hit, i, t);
+    return RaymarchInfo(hit, i, t, minTrap);
+}
+
+// https://www.stevenfrady.com/tools/palette?p=[[0.12,0.53,0.53],[0.95,0.37,0.25],[0.29,0.65,0.57],[0.85,0.54,0.3]]
+/*vec3 palette(float t){
+    vec3 a=vec3(0.12,0.53,0.53);
+    vec3 b=vec3(0.95,0.37,0.25);
+    vec3 c=vec3(0.29,0.65,0.57);
+    vec3 d=vec3(0.85,0.54,0.3);
+    return a+b*cos(6.28318*(c*t+d));
+}*/
+
+// https://www.stevenfrady.com/tools/palette?p=[[0.31,0.31,0.6],[0.28,0.28,0.74],[0.45,0.96,0.17],[0.43,0.65,0.67]]
+vec3 palette(float t){
+    vec3 a=vec3(0.31,0.31,0.6);
+    vec3 b=vec3(0.28,0.28,0.74);
+    vec3 c=vec3(0.45,0.96,0.17);
+    vec3 d=vec3(0.43,0.65,0.67);
+    return a+b*cos(6.28318*(c*t+d));
 }
 
 void main()
 {
     vec2 fragCoord  = vec2(gl_GlobalInvocationID.xy);
     vec2 resolution = vec2(gl_NumWorkGroups.xy * gl_WorkGroupSize.xy);
-
     vec2 uv = fragCoord/resolution;
 
-    vec3 camera = vec3(cos(time), 0.0, sin(time)) * 2.0;
+    float time = frames / 60.0;
+
+    // Camera movement
+    // ---------------
+    vec3 camera = vec3(1.0, 0.0, 0.0);
+    camera = normalize(vec3(cos(0.5), 0.0, sin(0.5))) * (5.0 - 4.5*pcos(time));
+
+    // Ray calculations
+    // ----------------
     vec2 ndc = (2.0 * fragCoord - resolution) / resolution.y;
-    vec3 target = vec3(0.0);
+    vec3 target = vec3(0.0, 0.0, 0.0);
     vec3 up     = vec3(0.0, 1.0, 0.0);
 
     vec3 dir = normalize(target - camera);
     vec3 right  = normalize(cross(dir, up));
     vec3 camUp  = cross(right, dir);
 
-    const float FOV = PI*0.5;
+    const float FOV = PI/6.0;
     float focalLength = 1.0 / tan(FOV*0.5);
     vec3 rayDir = normalize(ndc.x * right + ndc.y * camUp + focalLength * dir);
 
+    // Raymarch!
     RaymarchInfo info = raymarch(camera, rayDir);
-    
+
+    float mul = 30.0;
     vec3 col = vec3(0.0);
-    if (info.hit) {
-        col = vec3(float(info.steps) / float(RAY_STEPS));
-    }
+
+    float intens = tanh(float(info.steps)*mul / float(RAY_STEPS));
+    col = intens * vec3(uv, 0.0);
+
 
     imageStore(imgOut, ivec2(fragCoord), vec4(col, 1.0));
 }

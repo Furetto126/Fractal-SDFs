@@ -4,8 +4,7 @@
 layout (local_size_x = 8, local_size_y = 4, local_size_z = 1) in;
 layout(rgba32f, binding = 0) uniform image2D imgOut;
 
-uniform float time;
-//uniform vec2 resolution;
+uniform float frames;
 
 const double EPSILON = 1e-4;
 const double SCALE = 4.0;
@@ -91,14 +90,14 @@ void main()
     // Render fractal.
     vec2 z = (2.0*fragCoord - resolution) / resolution.y;
     vec2 center = vec2(-0.05, 0.6805);
-    float t = time*0.3;
-    float zoom = exp(-0.5*time);
+    float t = frames*0.3;
+    float zoom = exp(-0.5*frames);
     mat2 rot = mat2(cos(t), sin(t), -sin(t), cos(t));
 
     vec2 c = center + rot*(z - center)*zoom;
 
     DETrapResult deTrap;
-    if (fract(time*0.5) > 1.0)
+    if (fract(frames*0.5) > 1.0)
     {
         deTrap = DE_Mandelbrot(c, pow(10.0, 0.1));
         col = vec3(clamp(pow(4.0*deTrap.distance/zoom, 0.2), 0.0, 1.0));
