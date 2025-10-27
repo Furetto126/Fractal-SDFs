@@ -51,7 +51,7 @@ private:
                     "-f rawvideo -pixel_format rgb24 -video_size " + std::to_string(windowWidth) + "x" + std::to_string(windowHeight) + " "
                     "-framerate 60 "        // treat each input frame as 1/60 s
                     "-i - "
-                    "-c:v libx264 -preset fast -crf 18 -pix_fmt yuv420p "
+                    "-c:v libx264 -preset fast -crf 28 -pix_fmt yuv420p "
                     "output.mp4";
                 ffmpeg = popen(command.c_str(), "w");
                 frameBuffer = std::vector<uint8_t>(this->window.getWidth() * this->window.getHeight() * 3);
@@ -70,6 +70,8 @@ private:
                         frameCount = 0;
                         lastTime = currentTime;
                 }
+
+                if ((int)frames%60 == 0) std::cout << "Time: " << frames/60.0 << std::endl;
 
                 const glm::ivec2 resolution = this->window.getResolution();
 

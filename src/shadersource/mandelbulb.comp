@@ -7,14 +7,28 @@ layout(rgba32f, binding = 0) uniform image2D imgOut;
 uniform float frames;
 
 const float PI = 3.14159;
+const float TAU = 2.0*PI;
 const float EPSILON = 1e-6;
 const int RAY_STEPS = 10000;
-const float MAX_DIST = 50.0;
+const float MAX_DIST = 500.0;
 
 // Utils
 // -----
 float expDec(float a, float b, float t) { if (a <= b || t < 0) return 0.0; return exp(log(a-b) - t) + b;  }
+float sinP(float t, float p) { return sin(t/p * TAU); }
+float cosP(float t, float p) { return cos(t/p * TAU); }
+float psin(float t) { return 0.5 + 0.5*sin(t-PI*0.5); }
 float pcos(float t) { return 0.5 + 0.5*cos(t); }
+float psinP(float t, float p) { return psin(t/p * TAU); }
+float pcosP(float t, float p) { return pcos(t/p * TAU); }
+
+// complex number operations
+vec2 cadd( vec2 a, float s ) { return vec2( a.x+s, a.y ); }
+vec2 cmul( vec2 a, vec2 b )  { return vec2( a.x*b.x - a.y*b.y, a.x*b.y + a.y*b.x ); }
+vec2 cdiv( vec2 a, vec2 b )  { float d = dot(b,b); return vec2( dot(a,b), a.y*b.x - a.x*b.y ) / d; }
+vec2 csqrt( vec2 z ) { float m = length(z); return sqrt( 0.5*vec2(m+z.x, m-z.x) ) * vec2( 1.0, sign(z.y) ); }
+vec2 conj( vec2 z ) { return vec2(z.x,-z.y); }
+vec2 cpow( vec2 z, float n ) { float r = length( z ); float a = atan( z.y, z.x ); return pow( r, n )*vec2( cos(a*n), sin(a*n) ); }
 
 // Orbit trap types.
 // -----------------
@@ -33,11 +47,10 @@ struct DETrapInfo {
     float trap;
 };
 
-DETrapInfo DE_Mandelbulb(vec3 c)
+DETrapInfo DE_Mandelbulb(vec3 c, float EXP)
 {
     const int ITER = 100;
     const float ESCAPE_RADIUS = 4.0;
-    float EXP = 8.0;
 
     float minTrap = 1e9;
 
@@ -67,11 +80,10 @@ DETrapInfo DE_Mandelbulb(vec3 c)
     return DETrapInfo(0.5 * log(r) * r / dr, minTrap);
 }
 
-DETrapInfo DE_Julia(vec3 p, vec3 c)
+DETrapInfo DE_Julia(vec3 p, vec3 c, float EXP)
 {
     const int ITER = 100;
     const float ESCAPE_RADIUS = 4.0;
-    float EXP = 8.0;
 
     float minTrap = 1e9;
 
@@ -141,6 +153,37 @@ DETrapInfo DE_Mandelbox(vec3 p, float scale, float rMin2, float rMax2)
     return DETrapInfo(length(z) / abs(dr), minTrap);
 }
 
+DETrapInfo DE_Mandelbrot(vec2 c, float ESCAPE_RADIUS2)
+{
+    const int ITERATIONS = 2048;
+    const float EXPONENT = 2.0;
+
+    // Orbit trap
+    float minTrapDist = 1e20;
+
+    vec2 z  = vec2(0.0);
+    vec2 dz = vec2(0.0);
+    float r2 = 0.0;
+    for (int i = 0; i < ITERATIONS && r2 < ESCAPE_RADIUS2; i++) {
+        // Orbit trap calculation.
+        // -----------------------
+
+        // Point
+        minTrapDist = min(minTrapDist, trapPoint(vec3(z, 0.0), vec3(1.0, 1.0, 0.0)));
+        // Line
+        //minTrapDist = min(minTrapDist, trapLine(z, 2.0, 1.0));
+
+        // Distance Estimation calculation.
+        // --------------------------------
+        dz = EXPONENT*cmul(cpow(z, EXPONENT-1.0), dz) + vec2(1.0, 0.0);
+        z  = cpow(z, EXPONENT) + c;
+        r2 = dot(z, z);
+    }
+
+    float d = 0.5*sqrt(r2 / dot(dz, dz))*log(r2);
+    return DETrapInfo(d, minTrapDist);
+}
+
 struct RaymarchInfo {
     bool hit;
     int steps;
@@ -148,49 +191,17 @@ struct RaymarchInfo {
     float trap;
 };
 
-RaymarchInfo raymarch(vec3 start, vec3 dir)
-{
-    float minTrap = 1e9;
-    float t = 0.0;
-    bool hit = false;
-    int i;
-    for (i = 0; i < RAY_STEPS; i++)
-    {
-        vec3 p = start + t*dir;
-
-        DETrapInfo deTrap;
-
-        //deTrap = DE_Mandelbulb(p);
-        deTrap = DE_Julia(p, p-pcos(frames/60.0f));
-        //deTrap = DE_Mandelbox(p, 2.0 + 1.0*pcos(frames/60.0f), 2.0, 7.0);
-
-        float d = deTrap.distance;
-        minTrap = min(minTrap, deTrap.trap);
-
-        if (d < EPSILON) {
-            hit = true;
-            break;
-        }
-
-        t += d;
-        if (t > MAX_DIST) break;
-
-    }
-
-    return RaymarchInfo(hit, i, t, minTrap);
-}
-
 // https://www.stevenfrady.com/tools/palette?p=[[0.12,0.53,0.53],[0.95,0.37,0.25],[0.29,0.65,0.57],[0.85,0.54,0.3]]
-/*vec3 palette(float t){
+vec3 palette1(float t){
     vec3 a=vec3(0.12,0.53,0.53);
     vec3 b=vec3(0.95,0.37,0.25);
     vec3 c=vec3(0.29,0.65,0.57);
     vec3 d=vec3(0.85,0.54,0.3);
     return a+b*cos(6.28318*(c*t+d));
-}*/
+}
 
 // https://www.stevenfrady.com/tools/palette?p=[[0.31,0.31,0.6],[0.28,0.28,0.74],[0.45,0.96,0.17],[0.43,0.65,0.67]]
-vec3 palette(float t){
+vec3 palette2(float t){
     vec3 a=vec3(0.31,0.31,0.6);
     vec3 b=vec3(0.28,0.28,0.74);
     vec3 c=vec3(0.45,0.96,0.17);
@@ -198,42 +209,186 @@ vec3 palette(float t){
     return a+b*cos(6.28318*(c*t+d));
 }
 
+// Animation phases:
+// 1) Camera FOV goes from 180 to 30, Julia with parameter = to p, exp = 2              0-5s
+// 2) Julia parameter modulating, with a bit of camera spinning around fractal          5-15s
+//      2.2) + exponent modulating [2.0, 8.0]                                           15-25s
+// 3) Camera getting close to fractal multiple times                                    25-40s
+// 4) Zoom camera into fractal, FOV going to 180, Camera target looking around          40-50s
+// 5) Zoom out of a cardioid of the Mandelbrot set, white version with "bubbles", exp?  50-60/65s
+
+const float t0 = 0.0;
+const float t1 = 5.0;
+const float t2 = 15.0;
+const float t3 = 25.0;
+const float t4 = 30.0;
+const float t5 = 45.0;
+const float t6 = 60.0;
+const float t7 = 65.0;
+
+float time = frames/60.0;
+
+bool inT(float ts, float te) { return (time >= ts && time <= te); }
+float pT(float ts, float te) { return (time-ts) / (te-ts);        }
+
 void main()
 {
     vec2 fragCoord  = vec2(gl_GlobalInvocationID.xy);
     vec2 resolution = vec2(gl_NumWorkGroups.xy * gl_WorkGroupSize.xy);
     vec2 uv = fragCoord/resolution;
 
-    float time = frames / 60.0;
-
     // Camera movement
-    // ---------------
-    vec3 camera = vec3(1.0, 0.0, 0.0);
-    camera = normalize(vec3(cos(0.5), 0.0, sin(0.5))) * (5.0 - 4.5*pcos(time));
+    // -----------------------------------------------------------------------------------
+    vec3 camera = vec3(0.0, 0.0, 0.0);
+    vec3 target = vec3(0.0, 0.0, 0.0);
+    float FOV = PI/6.0;
+
+    float zoom;
+    vec2 mandelbrotC;
+
+    // 1) Camera FOV goes from 180 to 30, Julia with parameter = to p, exp = 2
+    if (inT(t0, t1))
+    {
+        float pTime = pT(t0, t1);
+        camera = vec3(0.0, 0.0, -5.0);
+        target = vec3(0.0);
+
+        FOV = mix(PI, PI/6.0, pow(smoothstep(0.0, 1.0, pTime), 0.75));
+    }
+    // 2) Julia parameter modulating, with a bit of camera spinning around fractal
+    else if (inT(t1, t2))
+    {
+        float pTime = pT(t1, t2);
+        camera = vec3(sinP(pTime, 1.0), sinP(pTime*3.0, 1.0)*0.2, -cosP(pTime, 1.0)) * 5.0;
+        target = vec3(0.0);
+    }
+    // 3) Camera getting close to fractal
+    else if (inT(t2, t3))
+    {
+        float pTime = pT(t2, t3);
+        camera = vec3(0.0, 0.0, mix(-1.0, -0.1, psinP(pTime, 1.0))) * 5.0;
+        target = vec3(0.0);
+    }
+    // Morph into Mandelbrot
+    else if (inT(t3, t4))
+    {
+        camera = vec3(0.0, 0.0, -5.0);
+        target = vec3(0.0);
+    }
+    // 4) Zoom camera into fractal, FOV going to 180, Camera target looking around
+    else if (inT(t4, t5))
+    {
+        float pTime = pT(t4, t5);
+
+        vec3 finalCamera = vec3(0.06, 0.06, -1.03);
+
+        camera = vec3(mix(0.0, finalCamera.x, pTime), mix(0.0, finalCamera.y, pTime), mix(-5.0, finalCamera.z, pow(pTime, 1.0/(pTime*4.0))));
+        target = mix(vec3(sinP(pTime, 1.0), cosP(pTime, 1.0), 0.0) * psinP(pTime, 1.0), vec3(finalCamera.xy, 0.0), pTime);
+        //FOV = mix(PI/6.0, 1.5*PI, pTime);
+    }
+    // 5) Zoom out of a cardioid of the Mandelbrot set, white version with "bubbles"
+    else if (inT(t5, t6))
+    {
+        float pTime = pT(t5, t6);
+        camera = vec3(-0.672, -0.337, 0.0);
+
+        vec2 z = (2.0*fragCoord - resolution) / resolution.y;
+        zoom = mix(0.0, 1.3, smoothstep(0.0, 1.0, pow(pTime, 2.0)));
+        mat2 rot = mat2(cosP(pTime, 1.0), sinP(pTime, 1.0), -sinP(pTime, 1.0), cosP(pTime, 1.0));
+
+        mandelbrotC = camera.xy + rot*(z - camera.xy) * zoom;
+    }
+    else return;
 
     // Ray calculations
-    // ----------------
+    // -----------------------------------------------------------------------------------
     vec2 ndc = (2.0 * fragCoord - resolution) / resolution.y;
-    vec3 target = vec3(0.0, 0.0, 0.0);
     vec3 up     = vec3(0.0, 1.0, 0.0);
 
     vec3 dir = normalize(target - camera);
     vec3 right  = normalize(cross(dir, up));
     vec3 camUp  = cross(right, dir);
 
-    const float FOV = PI/6.0;
     float focalLength = 1.0 / tan(FOV*0.5);
     vec3 rayDir = normalize(ndc.x * right + ndc.y * camUp + focalLength * dir);
 
-    // Raymarch!
-    RaymarchInfo info = raymarch(camera, rayDir);
+    // Raymarch
+    // -----------------------------------------------------------------------------------
+    RaymarchInfo info;
 
-    float mul = 30.0;
+    if (inT(t5, t6))
+    {
+        DETrapInfo deTrap = DE_Mandelbrot(mandelbrotC, pow(10.0, 0.3));
+        info = RaymarchInfo(true, 1, deTrap.distance, deTrap.trap);
+    }
+    else
+    {
+        float minTrap = 1e9;
+        float t = 0.0;
+        bool hit = false;
+        int i;
+        for (i = 0; i < RAY_STEPS; i++)
+        {
+            vec3 p = camera + t*rayDir;
+
+            DETrapInfo deTrap;
+
+            if (inT(t0, t1))
+            {
+                deTrap = DE_Julia(p, vec3(0.0), 2.0);
+            }
+            if (inT(t1, t3))
+            {
+                float pTime = pT(t1, t3);
+                vec3 c = vec3(sinP(pTime, 1.0), cosP(pTime, 0.5), sinP(pTime, 1.0) / cosP(pTime, 0.5)) * 0.5;
+                c = mix(vec3(0.0), c, pow(pTime, 1.0/2.0));
+                float exponent = 2.0;
+                if (inT(t2, t3)) {
+                    float pSubAnim = pT(t2, t3);
+                    exponent = 2.0 + 6.0*psinP(pSubAnim, 1.0);
+                }
+
+                deTrap = DE_Julia(p, c, exponent);
+            }
+            if (inT(t3, t4))
+            {
+                float pTime = pT(t3, t4);
+                vec3 c = mix(vec3(0.0, 0.5, 0.0), p, smoothstep(0.0, 1.0, pTime));
+                float exp = mix(2.0, 8.0, smoothstep(0.0, 1.0, pTime));
+                deTrap = DE_Julia(p, c, exp);
+            }
+            if (inT(t4, t5))
+            {
+                deTrap = DE_Mandelbulb(p, 8.0);
+            }
+
+            float d = deTrap.distance;
+            minTrap = min(minTrap, deTrap.trap);
+
+            if (d < EPSILON) {
+                hit = true;
+                break;
+            }
+
+            t += d;
+            if (t > MAX_DIST) break;
+
+        }
+        info =  RaymarchInfo(hit, i, t, minTrap);
+    }
+
+    // Shading
+    // -----------------------------------------------------------------------------------
+    float mul = 15.0;
     vec3 col = vec3(0.0);
 
     float intens = tanh(float(info.steps)*mul / float(RAY_STEPS));
-    col = intens * vec3(uv, 0.0);
+    col = vec3((intens));
 
+    if (inT(t5, t6))
+    {
+        col = vec3(clamp(pow(4.0*info.t/zoom, 0.2), 0.0, 1.0));
+    }
 
     imageStore(imgOut, ivec2(fragCoord), vec4(col, 1.0));
 }
